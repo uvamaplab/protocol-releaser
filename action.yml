@@ -170,12 +170,25 @@ runs:
         zip -r protocol.zip .
       shell: bash
 
+    # protocol.zip MUST be uploaded last, in its own step after every other file. The trails cloud
+    # (azure-iac's ProtocolReleasesSync) offers a release to the app as soon as it sees protocol.zip,
+    # with the app version it needs read from the manifest.json already attached. A manifest.json
+    # that arrived later would leave the release offered, until the next check, to apps too old to
+    # run it. action-gh-release uploads a step's files concurrently (Promise.all), so the order needs
+    # two steps. A protocol without a manifest.json only gets a warning here.
+    - name: Upload release files
+      uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
+      with:
+        files: |
+          ./${{ inputs.src_directory }}/manifest.json
+          ${{ runner.temp }}/protocol-releaser/media.zip
+          ${{ runner.temp }}/protocol-releaser/text.zip
+        tag_name: ${{ inputs.tag_name }}
+
+    # Last, and alone: see the comment on the step above.
     - name: Upload release ZIP
       uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
       with:
         files: |
           ./${{ inputs.src_directory }}/protocol.zip
-          ./${{ inputs.src_directory }}/manifest.json
-          ${{ runner.temp }}/protocol-releaser/media.zip
-          ${{ runner.temp }}/protocol-releaser/text.zip
         tag_name: ${{ inputs.tag_name }}
