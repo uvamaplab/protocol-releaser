@@ -15,15 +15,33 @@ workflow from the Actions tab.
 
 ## bundledprotocol.json
 
-Every release also carries `bundledprotocol.json`: one JSON object mapping a path to that file's
-text, holding `protocol.json` and every file its `{"type": "ref", "path": ...}` objects name,
-followed recursively (`bundle.py`). Paths with a scheme (`flow://...`) are not files and are
-skipped; a path with a variable (`protocols/${global:group}/surveys.json`) includes every file
-the pattern can name, so the bundle covers every arm. The trails cloud (azure-iac's
-`ProtocolReleasesSync`) reads this one small file per release, instead of the repo or the zip, for
-what the server needs from a protocol, such as its `agent` section. A `protocol.json` that is not
-valid JSON, or a reference to a file the protocol does not have, fails the release here, where the
-publisher sees it; a variable pattern matching no file is a warning.
+Every release also carries `bundledprotocol.json`, written by `bundle.py`, so the trails cloud
+(azure-iac's `ProtocolReleasesSync`) reads one small file per release, instead of the repo or the
+zip, for what the server needs from a protocol, such as its `agent` section.
+
+```json
+{
+  "files": { "protocol.json": "...", "protocols/control/surveys.json": "..." },
+  "variables": ["global:group"],
+  "resolved": { "control": "...", "treatment": "..." }
+}
+```
+
+`files` holds `protocol.json` and every file its `{"type": "ref", "path": ...}` objects name,
+followed recursively, as path to text. Paths with a scheme (`flow://...`) are not files and are
+skipped. A path with a variable (`protocols/${global:group}/surveys.json`) includes every file the
+pattern can name, and the files found are also where the variable's values come from: `control` and
+`treatment` here, plus any default written as `${global:group, control}`. Nothing is declared.
+
+`resolved` holds `protocol.json` with every reference replaced by the file it names, once per
+combination of the values found, keyed by the values joined with `|` in the order of `variables`.
+A value of `""` means the variable is not set, which resolves only where the path has a default.
+A combination whose paths name no file is left out. A reader picks the entry for a participant's
+values and never resolves a reference itself; the app resolves the same way on the device today.
+
+A `protocol.json` that is not valid JSON, or a literal reference to a file the protocol does not
+have, fails the release here, where the publisher sees it; a variable pattern matching no file is a
+warning.
 
 ## Upload order
 
