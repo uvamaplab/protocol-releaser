@@ -13,11 +13,12 @@ GitHub runs a release event's workflow as of that release's commit, so the tag f
 from the first one that carries the workflow; to point `latest` at an older release, run the
 workflow from the Actions tab.
 
-## bundledprotocol.json
+## bundle.json
 
-Every release also carries `bundledprotocol.json`, written by `bundle.py`, so the trails cloud
+Every release also carries `bundle.json`, written by `bundle.py`, so the trails cloud
 (azure-iac's `ProtocolReleasesSync`) reads one small file per release, instead of the repo or the
-zip, for what the server needs from a protocol, such as its `agent` section.
+zip, for what the server needs from a protocol, such as its `agent` section. Releases made with
+v1.10.x named it `bundledprotocol.json`, which the trails cloud still reads.
 
 ```json
 {
@@ -45,7 +46,7 @@ warning.
 
 ## Upload order
 
-`protocol.zip` is uploaded last, in its own step, after `manifest.json`, `bundledprotocol.json`,
+`protocol.zip` is uploaded last, in its own step, after `manifest.json`, `bundle.json`,
 `media.zip` and `text.zip`. Keep it that way. The trails cloud (azure-iac's `ProtocolReleasesSync`) offers a
 release to the app as soon as it sees `protocol.zip`, and takes the app version the release needs
 from the `manifest.json` already attached. A `manifest.json` that arrived after the zip would leave
