@@ -44,6 +44,18 @@ A `protocol.json` that is not valid JSON, or a literal reference to a file the p
 have, fails the release here, where the publisher sees it; a variable pattern matching no file is a
 warning.
 
+## Media cache
+
+Every release also carries `media.zip` (its processed images, videos and audio, plus
+`media-cache.tsv`) and `text.zip` (everything else). A release takes any image or video whose
+original content is unchanged from the newest earlier release's `media.zip` instead of processing it
+again, but only if that release ran the same `media.sh`: the cache's key is `media.sh`'s SHA-256.
+
+So how media is processed is changed in `media.sh` and nowhere else, and after such a change every
+protocol's next release processes all its media again (for leia, about 3 minutes instead of about
+36 seconds). Changes anywhere else in the action keep the cache. Up to v1.11.0 the key was
+`action.yml`'s hash, so the first release after that version processes everything once.
+
 ## Upload order
 
 `protocol.zip` is uploaded last, in its own step, after `manifest.json`, `bundle.json`,

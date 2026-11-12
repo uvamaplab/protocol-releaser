@@ -37,15 +37,17 @@ runs:
       shell: bash
 
     # Lists the images over 100 KiB and the videos to process, with a hash of each one's content.
-    # Any that the newest earlier release with a media.zip (built by this same action.yml) already
-    # processed are copied from that media.zip instead, so unchanged media is not processed again.
+    # Any that the newest earlier release with a media.zip already processed, with this same
+    # media.sh, are copied from that media.zip instead, so unchanged media is not processed again.
+    # The key is media.sh's hash alone, so editing the rest of this file keeps the cache; see the
+    # top of media.sh.
     - name: Reuse media processed by an earlier release
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
         work="$RUNNER_TEMP/protocol-releaser"
         rm -rf "$work" && mkdir -p "$work/cache"
-        settings=$(sha256sum "$GITHUB_ACTION_PATH/action.yml" | cut -d' ' -f1)
+        settings=$(sha256sum "$GITHUB_ACTION_PATH/media.sh" | cut -d' ' -f1)
         echo "$settings" > "$work/settings"
 
         find ./${{ inputs.src_directory }}/* -type f \( -name '*.jpeg' -o -name '*.jpg' -o -name '*.png' -o -name '*.gif' \) -size +100k -print0 > "$work/candidates"
@@ -98,49 +100,13 @@ runs:
         )
       shell: bash
 
-    # The '>' in --size means only shrink, never enlarge. parallel -X gives each vipsthumbnail
-    # a batch of files (startup is paid per batch, not per file); each output is written next to
-    # its input as __resized__<name>, then renamed over it. parallel runs the command through a
-    # shell, so it needs the inner quotes.
-    # .jpeg/.jpg files are saved as WebP but keep their names, so references in the protocol JSON
-    # still work: the app's image decoders (Android 10+, iOS 15+) detect the format from the content.
-    # WebP Q75 was about 30% smaller than JPEG Q70 and scored higher on SSIM for leia's images.
+    # How images and videos are processed is in media.sh, which is also the media cache's key.
     - name: Resize images to optimized thumbnails
-      run: |
-        work="$RUNNER_TEMP/protocol-releaser"
-        if [ ! -s "$work/todo-images" ]; then echo "No images to resize"; exit 0; fi
-        time ( \
-          awk '/\.jpeg$/' "$work/todo-images" | parallel -X vipsthumbnail --size "'650x1300>'" --export-profile srgb -o "'__resized__%s.jpeg.webp[Q=75,strip=true]'"; \
-          awk '/\.jpg$/' "$work/todo-images" | parallel -X vipsthumbnail --size "'650x1300>'" --export-profile srgb -o "'__resized__%s.jpg.webp[Q=75,strip=true]'"; \
-          awk '/\.png$/' "$work/todo-images" | parallel -X vipsthumbnail --size "'650x1300>'" --export-profile srgb -o "'__resized__%s.png[profile=none,strip=true,compression=9]'"; \
-          awk '/\.gif$/' "$work/todo-images" | parallel -X vipsthumbnail --size "'650x1300>'" --export-profile srgb -o "'__resized__%s.gif[strip=true]'"; \
-          while IFS= read -r f; do \
-            out="${f%/*}/__resized__${f##*/}"; \
-            case "$f" in *.jpeg|*.jpg) out="$out.webp" ;; esac; \
-            mv -f "$out" "$f"; \
-          done < "$work/todo-images"; \
-        )
+      run: bash "${{ github.action_path }}/media.sh" images "$RUNNER_TEMP/protocol-releaser/todo-images"
       shell: bash
 
-    # Re-encodes each .mp4 to H.264 with its shorter side at most 720 (never enlarged), CRF 26,
-    # 8-bit 4:2:0 so phones can decode it in hardware, AAC 96k audio, and the index moved to the
-    # front so playback can start while downloading. A video is only replaced if the result is smaller.
     - name: Compress videos
-      run: |
-        work="$RUNNER_TEMP/protocol-releaser"
-        if [ ! -s "$work/todo-videos" ]; then echo "No videos to compress"; exit 0; fi
-        while IFS= read -r f; do
-          out="$(dirname "$f")/__resized__$(basename "$f")"
-          start=$SECONDS
-          ffmpeg -nostdin -hide_banner -loglevel error -y -i "$f" \
-            -vf "scale='if(gt(iw,ih),-2,trunc(min(720,iw)/2)*2)':'if(gt(iw,ih),trunc(min(720,ih)/2)*2,-2)'" \
-            -c:v libx264 -preset veryfast -crf 26 -pix_fmt yuv420p \
-            -c:a aac -b:a 96k -movflags +faststart "$out"
-          before=$(stat -c%s "$f")
-          after=$(stat -c%s "$out")
-          if [ "$after" -lt "$before" ]; then mv "$out" "$f"; result=replaced; else rm "$out"; result="kept original (re-encode was not smaller)"; fi
-          echo "$f: $((before / 1024)) KB -> $((after / 1024)) KB in $((SECONDS - start))s, $result"
-        done < "$work/todo-videos"
+      run: bash "${{ github.action_path }}/media.sh" videos "$RUNNER_TEMP/protocol-releaser/todo-videos"
       shell: bash
 
     # Splits the release into media.zip (images, videos and audio) and text.zip (everything else),
