@@ -35,14 +35,43 @@ pattern can name, and the files found are also where the variable's values come 
 `treatment` here, plus any default written as `${global:group, control}`. Nothing is declared.
 
 `resolved` holds `protocol.json` with every reference replaced by the file it names, once per
-combination of the values found, keyed by the values joined with `|` in the order of `variables`.
-A value of `""` means the variable is not set, which resolves only where the path has a default.
-A combination whose paths name no file is left out. A reader picks the entry for a participant's
-values and never resolves a reference itself; the app resolves the same way on the device today.
+combination of the values found, keyed by the values joined with `|` in the order of `variables`,
+lower-cased (the action lower-cases file names, and the server lower-cases a participant's values
+the same way). A value of `""` means the variable is not set, which resolves only where the path
+has a default. A combination whose paths name no file is left out. A reader picks the entry for a
+participant's values and never resolves a reference itself; the app resolves the same way on the
+device today.
 
 A `protocol.json` that is not valid JSON, or a literal reference to a file the protocol does not
 have, fails the release here, where the publisher sees it; a variable pattern matching no file is a
 warning.
+
+## The variable language
+
+Placeholders are `${namespace:name,default}`, the same in the app (digital-trails, `CLAUDE.md`
+"Protocol variables"), on the server (azure-iac, `ParticipantProtocols`) and here. The namespaces
+are `global` (a participant's study variable), `role` (their one type role; `role:prefix` the
+value of their group role under that prefix) and `historical` (a historical variable, in flows).
+Everything after the first comma is the default; whitespace inside the braces is ignored; names
+match case aside. `bundle.py` lints every `.json` under `src`, flows included, and fails the
+release on a placeholder in any other namespace (the retired `variant:` among them) or one nested
+in another, since the app would leave either as written. A placeholder that never closes is a
+warning.
+
+`protocol.json` may declare its variables once:
+
+```json
+"variables": {
+  "group": { "values": ["control", "treatment"], "description": "Study arm" },
+  "checkin_time": { "default": "20:00" }
+}
+```
+
+Declared `values` and `default` join the values found from file names when `resolved` is built,
+so an arm with no directory of its own still gets an entry. Once a protocol declares any
+variable, a `${global:...}` it does not declare is a warning. The app reads the same declaration
+for defaults (`${global:checkin_time}` resolves to `20:00` while the variable is unset; an inline
+default still wins). Declaring is optional.
 
 ## Media cache
 
