@@ -10,6 +10,11 @@ VARIABLE = re.compile(r"\$\{([^}]*)\}")
 PROTOCOL = "protocol.json"
 MISSING = ""
 
+# The variable language, shared with the app (digital-trails CLAUDE.md, "Protocol variables")
+# and the server (azure-iac ParticipantProtocols): ${namespace:name,default}. These are the
+# namespaces a placeholder may read from; anything else never resolves, so it fails the release.
+NAMESPACES = {"global", "role", "historical"}
+
 
 def is_ref(node):
     if not isinstance(node, dict):
@@ -41,6 +46,69 @@ def normalize(path):
 def parse_token(token):
     name, _, default = token.partition(",")
     return name.strip(), (default.strip() if _ else None)
+
+
+def namespace_of(name):
+    """The namespace of a variable name: "global:arm" gives "global", a bare "role" gives "role"."""
+    return name.partition(":")[0].strip().lower()
+
+
+def declared_variables(protocol):
+    """
+    protocol.json's optional "variables" object, {"arm": {"default": ..., "values": [...]}},
+    keyed as the placeholders name them ("global:arm"). Declaring is optional: an undeclared
+    variable's values still come from the files its ref paths match.
+    """
+    declared = {}
+    section = protocol.get("variables") if isinstance(protocol, dict) else None
+    if not isinstance(section, dict):
+        return declared
+    for name, spec in section.items():
+        if not isinstance(spec, dict):
+            continue
+        values = spec.get("values")
+        default = spec.get("default")
+        declared[f"global:{name}"] = {
+            "values": [str(value) for value in values] if isinstance(values, list) else [],
+            "default": None if default is None or isinstance(default, (dict, list)) else str(default),
+        }
+    return declared
+
+
+def strings(node):
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for value in node.values():
+            yield from strings(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from strings(value)
+
+
+def lint_placeholders(rel, parsed, declared):
+    """
+    Every ${...} in the file, checked against the language: an unknown namespace (including the
+    retired variant:) or a nested placeholder is an error, since the app would leave it as
+    written; a global the protocol declares nothing about is a warning once it declares any.
+    """
+    errors, warnings = [], []
+    for text in strings(parsed):
+        if "${" in text and not VARIABLE.search(text):
+            warnings.append(f'{rel}: "{text}" opens a placeholder it never closes')
+        for token in VARIABLE.findall(text):
+            if "${" in token:
+                errors.append(f'{rel}: "${{{token}}}" nests one placeholder in another, which the language has no meaning for')
+                continue
+            name, _ = parse_token(token)
+            namespace = namespace_of(name)
+            if namespace not in NAMESPACES:
+                errors.append(f'{rel}: "${{{token}}}" reads from "{namespace}", which is not a variable namespace ({", ".join(sorted(NAMESPACES))})')
+            elif namespace == "global" and name.partition(":")[2].strip() == "":
+                errors.append(f'{rel}: "${{{token}}}" names no variable')
+            elif namespace == "global" and declared and name.lower() not in {key.lower() for key in declared}:
+                warnings.append(f'{rel}: "${{{token}}}" is not declared in {PROTOCOL}\'s "variables"')
+    return errors, warnings
 
 
 def is_file_path(path):
@@ -91,6 +159,8 @@ def collect(src):
     files = {}
     values = {}
     warnings = []
+    errors = []
+    declared = None
     pending = [PROTOCOL]
     while pending:
         rel = pending.pop(0)
@@ -98,6 +168,12 @@ def collect(src):
             continue
         text, parsed = read(src, rel)
         files[rel] = text
+        if declared is None:
+            declared = declared_variables(parsed)
+            for name, spec in declared.items():
+                values.setdefault(name, set()).update(spec["values"])
+                if spec["default"] is not None:
+                    values[name].add(spec["default"])
         for path in refs(parsed):
             if not is_file_path(path):
                 continue
@@ -115,7 +191,32 @@ def collect(src):
                 pending.append(file)
                 for name, value in matched.items():
                     values[name].add(value)
+    for rel in sorted(every_json(src)):
+        if rel in files:
+            parsed = json.loads(files[rel])
+        else:
+            # A flow or home file the refs never reach is linted but not required to parse here:
+            # the app reads it on its own terms, and its JSON was never this script's to refuse.
+            with open(os.path.join(src, rel), encoding="utf-8-sig") as handle:
+                try:
+                    parsed = json.load(handle)
+                except json.JSONDecodeError as error:
+                    warnings.append(f"{rel} is not valid JSON: {error}")
+                    continue
+        file_errors, file_warnings = lint_placeholders(rel, parsed, declared or {})
+        errors.extend(file_errors)
+        warnings.extend(file_warnings)
+    if errors:
+        sys.exit("\n".join(errors))
     return files, values, warnings
+
+
+def every_json(src):
+    """Every .json under src, as paths relative to it: flows and home files too, not only what the refs reach."""
+    for root, _, names in os.walk(src):
+        for name in names:
+            if name.lower().endswith(".json"):
+                yield os.path.relpath(os.path.join(root, name), src).replace(os.sep, "/")
 
 
 def dereference(node, files, values):
@@ -142,7 +243,9 @@ def resolve_all(files, values):
             protocol = dereference(json.loads(files[PROTOCOL]), files, chosen)
         except (KeyError, FileNotFoundError):
             continue
-        resolved["|".join(combination)] = json.dumps(protocol, ensure_ascii=False)
+        # Keys are lower case, as the server builds them from a participant's values: the files
+        # that give a variable its values are lower-cased by the action, roles are not.
+        resolved["|".join(value.lower() for value in combination)] = json.dumps(protocol, ensure_ascii=False)
     return names, resolved
 
 
